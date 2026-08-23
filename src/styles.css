@@ -1041,6 +1041,7 @@ button:disabled { cursor:not-allowed; opacity:.55; }
   .subscription-panel,.category-panel { padding:17px; }
   .dashboard-main .subscription-stack { max-height:356px; }.subscription-card{min-height:62px}.subscription-card>div{gap:3px}.subscription-card strong{font-size:13px}.subscription-card small{font-size:10px}.subscription-card>b{font-size:15px}
   .dashboard-main .category-list { max-height:285px; }.category-row{min-height:55px}.category-data{font-size:13px}.category-data span{display:block;font-size:10px}
+  .dashboard-main .subscription-stack,.dashboard-main .category-list { max-height:none; overflow:visible; overscroll-behavior:auto; padding-right:0; }
 
   .module-view { min-height:calc(100dvh - 96px); padding:20px 16px; border-radius:22px; }
   .module-heading { flex-direction:column; gap:18px; padding-bottom:20px; }.module-heading h1{font-size:clamp(38px,13vw,58px)}.module-heading p{font-size:13px;line-height:1.5}

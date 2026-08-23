@@ -108,6 +108,7 @@ function App() {
   }, [session])
   useEffect(() => {
     const root = document.documentElement
+    const mobileViewport = window.matchMedia('(max-width: 900px)')
     let hideTimer: ReturnType<typeof setTimeout> | undefined
     let frame: number | undefined
     let pageScrollPending = false
@@ -130,6 +131,7 @@ function App() {
       hideTimer = setTimeout(() => root.classList.remove('is-scrolling', 'page-is-scrolling'), 650)
     }
     const markScrolling = (event: Event) => {
+      if (mobileViewport.matches) return
       const target = event.target
       pageScrollPending ||= target === document || target === root || target === document.body
       if (frame === undefined) frame = window.requestAnimationFrame(renderScrollState)
