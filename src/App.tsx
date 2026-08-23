@@ -107,26 +107,40 @@ function App() {
     return () => { active = false }
   }, [session])
   useEffect(() => {
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const markScrolling = (event: Event) => {
-      const root = document.documentElement
-      const target = event.target
-      const isPageScroll = target === document || target === root || target === document.body
+    const root = document.documentElement
+    let hideTimer: ReturnType<typeof setTimeout> | undefined
+    let frame: number | undefined
+    let pageScrollPending = false
+    const renderScrollState = () => {
+      frame = undefined
       root.classList.add('is-scrolling')
-      if (isPageScroll) {
-        const viewport = window.innerHeight
-        const scrollRange = Math.max(0, root.scrollHeight - viewport)
-        const thumbHeight = Math.max(48, viewport * Math.min(1, viewport / root.scrollHeight))
-        const thumbTop = scrollRange > 0 ? (root.scrollTop / scrollRange) * (viewport - thumbHeight) : 0
+      if (pageScrollPending) {
+        pageScrollPending = false
+        const viewport = Math.max(1, window.innerHeight)
+        const documentHeight = Math.max(viewport, root.scrollHeight)
+        const scrollRange = documentHeight - viewport
+        const scrollTop = Math.min(scrollRange, Math.max(0, window.scrollY || root.scrollTop))
+        const thumbHeight = Math.max(48, viewport * (viewport / documentHeight))
+        const thumbTop = scrollRange > 0 ? (scrollTop / scrollRange) * (viewport - thumbHeight) : 0
         root.style.setProperty('--page-scroll-height', `${thumbHeight}px`)
         root.style.setProperty('--page-scroll-top', `${thumbTop}px`)
         root.classList.add('page-is-scrolling')
       }
-      if (timer) clearTimeout(timer)
-      timer = setTimeout(() => { root.classList.remove('is-scrolling'); root.classList.remove('page-is-scrolling') }, 650)
+      if (hideTimer) clearTimeout(hideTimer)
+      hideTimer = setTimeout(() => root.classList.remove('is-scrolling', 'page-is-scrolling'), 650)
+    }
+    const markScrolling = (event: Event) => {
+      const target = event.target
+      pageScrollPending ||= target === document || target === root || target === document.body
+      if (frame === undefined) frame = window.requestAnimationFrame(renderScrollState)
     }
     window.addEventListener('scroll', markScrolling, { passive: true, capture: true })
-    return () => { window.removeEventListener('scroll', markScrolling, true); if (timer) clearTimeout(timer); document.documentElement.classList.remove('is-scrolling', 'page-is-scrolling') }
+    return () => {
+      window.removeEventListener('scroll', markScrolling, true)
+      if (frame !== undefined) window.cancelAnimationFrame(frame)
+      if (hideTimer) clearTimeout(hideTimer)
+      root.classList.remove('is-scrolling', 'page-is-scrolling')
+    }
   }, [])
   useEffect(() => { const syncRoute = () => { if (window.location.pathname.startsWith('/app/')) setActiveNav(navFromPath()); else if (!workspace) setEntryView(window.location.pathname === '/login' ? 'login' : 'landing') }; window.addEventListener('popstate', syncRoute); return () => window.removeEventListener('popstate', syncRoute) }, [workspace])
   useEffect(() => { if (workspace && new URLSearchParams(window.location.search).get('action') === 'add') { setShowModal(true); window.history.replaceState({}, '', window.location.pathname) } }, [workspace])
