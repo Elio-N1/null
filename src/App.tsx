@@ -40,6 +40,14 @@ const pathFor = (section: string) => `/app/${section.toLowerCase()}`
 const navFromPath = () => { const slug = window.location.pathname.split('/')[2]; if (slug === 'plan') return 'Budget'; return navSections.find((item) => item.toLowerCase() === slug) ?? 'Dashboard' }
 const currentMonthKey = () => { const now = new Date(); return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}` }
 
+function AppLoadingScreen({ theme, message }: { theme: ThemeName; message: string }) {
+  return <div className="app app-loading-screen" data-theme={theme} role="status" aria-live="polite"><div className="loading-atmosphere" aria-hidden="true"><i /><i /></div><div className="app-loading-card"><span className="loading-brand">NULL</span><strong>{message}</strong><small>YOUR MONEY SPACE IS ALMOST READY</small><div className="loading-progress" aria-hidden="true"><i /></div></div></div>
+}
+
+function LedgerLoadingState() {
+  return <Glass className="ledger-loading-state"><div className="ledger-loading-copy" role="status" aria-live="polite"><span><i /><i /><i /></span><strong>SYNCING YOUR LEDGER</strong><small>Using your last saved snapshot while fresh data arrives.</small></div></Glass>
+}
+
 function App() {
   const [workspace, setWorkspace] = useState<BudgetWorkspace | null>(null)
   const [workspaces, setWorkspaces] = useState<WorkspaceRecord[]>([])
@@ -66,34 +74,40 @@ function App() {
   const [transactionToDelete, setTransactionToDelete] = useState<Transaction | null>(null)
   const [loading, setLoading] = useState(false)
   const [dataError, setDataError] = useState('')
+  const sessionUserId = session?.user.id ?? null
 
-  const commitData = useCallback((next: WorkspaceSnapshot) => { setData(next); if (workspace && session) writeWorkspaceCache(session.user.id, workspace, next) }, [workspace, session])
+  const commitData = useCallback((next: WorkspaceSnapshot) => { setData(next); if (workspace && sessionUserId) writeWorkspaceCache(sessionUserId, workspace, next) }, [workspace, sessionUserId])
   const refreshAll = useCallback(async (showLoader = false) => {
-    if (!workspace || !session) return
+    if (!workspace || !sessionUserId) return
     if (showLoader) setLoading(true)
     setDataError('')
     try { commitData(await loadWorkspaceSnapshot(workspace)) }
     catch (reason) { setDataError(reason instanceof Error ? reason.message : 'Could not load your saved budget data.') }
     finally { if (showLoader) setLoading(false) }
-  }, [workspace, session, commitData])
+  }, [workspace, sessionUserId, commitData])
 
   useEffect(() => { try { localStorage.setItem(themeKey, theme) } catch { /* preference persistence is optional */ } }, [theme])
   useEffect(() => {
     if (!supabase) { setAuthReady(true); return }
     let active = true
     void supabase.auth.getSession().then(({ data: { session: next } }) => { if (active) { setSession(next); setAuthReady(true) } })
-    const { data: listener } = supabase.auth.onAuthStateChange((event, next) => { setSession(next); setAuthReady(true); if (event === 'PASSWORD_RECOVERY') { setRecoveryMode(true); setEntryView('login'); setWorkspace(null) } if (!next) { setWorkspace(null); setWorkspaces([]); setWorkspacesReady(false); clearWorkspacePreference() } })
+    const { data: listener } = supabase.auth.onAuthStateChange((event, next) => {
+      setSession((current) => current?.user.id === next?.user.id ? current : next)
+      setAuthReady(true)
+      if (event === 'PASSWORD_RECOVERY') { setRecoveryMode(true); setEntryView('login'); setWorkspace(null) }
+      if (!next) { setWorkspace(null); setWorkspaces([]); setWorkspacesReady(false); clearWorkspacePreference() }
+    })
     return () => { active = false; listener.subscription.unsubscribe() }
   }, [])
   const refreshWorkspaces = useCallback(async () => {
-    if (!session) return []
+    if (!sessionUserId) return []
     const rows = await loadUserWorkspaces()
     setWorkspaces(rows)
     setWorkspacesReady(true)
     return rows
-  }, [session])
+  }, [sessionUserId])
   useEffect(() => {
-    if (!session) return
+    if (!sessionUserId) return
     let active = true
     setWorkspacesReady(false)
     void loadUserWorkspaces().then((rows) => {
@@ -105,7 +119,7 @@ function App() {
       else { setWorkspace(null); clearWorkspacePreference() }
     }).catch((reason) => { if (active) { setWorkspacesReady(true); setDataError(reason instanceof Error ? reason.message : 'Could not load your workspaces.') } })
     return () => { active = false }
-  }, [session])
+  }, [sessionUserId])
   useEffect(() => {
     const root = document.documentElement
     const mobileViewport = window.matchMedia('(max-width: 900px)')
@@ -147,12 +161,12 @@ function App() {
   useEffect(() => { const syncRoute = () => { if (window.location.pathname.startsWith('/app/')) setActiveNav(navFromPath()); else if (!workspace) setEntryView(window.location.pathname === '/login' ? 'login' : 'landing') }; window.addEventListener('popstate', syncRoute); return () => window.removeEventListener('popstate', syncRoute) }, [workspace])
   useEffect(() => { if (workspace && new URLSearchParams(window.location.search).get('action') === 'add') { setShowModal(true); window.history.replaceState({}, '', window.location.pathname) } }, [workspace])
   useEffect(() => {
-    if (!workspace || !session) { setLoading(false); setData(null); return }
-    const cached = readWorkspaceCache(session.user.id, workspace)
+    if (!workspace || !sessionUserId) { setLoading(false); setData(null); return }
+    const cached = readWorkspaceCache(sessionUserId, workspace)
     if (cached) setData(cached)
     if (!supabaseConfigured) { setDataError('Supabase environment variables are missing. Restart the local server after adding .env.local.'); return }
     void refreshAll(!cached)
-  }, [workspace, session, refreshAll])
+  }, [workspace, sessionUserId, refreshAll])
 
   const transactions = useMemo(() => data?.transactions ?? [], [data?.transactions])
   const accounts = useMemo(() => data?.accounts ?? [], [data?.accounts])
@@ -199,6 +213,7 @@ function App() {
       name: item.name,
       currency: item.currency,
       active: item.active,
+      primary: item.id === mainAccount?.id,
       balanceUsd: accountBalance(item, transactions, transfers),
     })),
     categories: categories.map(({ id, name, group, active }) => ({ id, name, group, active })),
@@ -207,7 +222,7 @@ function App() {
     subscriptions: subscriptions.map(({ id, name, amountUsd, originalAmount, originalCurrency, dueDay, active }) => ({ id, name, amountUsd, originalAmount, originalCurrency, dueDay, active })),
     transactions: transactions.slice(0, 500).map(({ id, name, category, date, amount, kind, originalAmount, originalCurrency, exchangeRate: lockedRate, notes, accountId }) => ({ id, name, category, date, amount, kind, originalAmount, originalCurrency, exchangeRate: lockedRate, notes, accountId })),
     transfers: transfers.map(({ id, fromAccountId, toAccountId, amountUsd, date }) => ({ id, fromAccountId, toAccountId, amount: amountUsd, date })),
-  }), [workspace, currency, exchangeRate, month, balance, mainAccountBalance, unallocatedCash, spent, income, monthlyBudget, accounts, categories, budgetsForMonth, goals, subscriptions, transactions, transfers])
+  }), [workspace, currency, exchangeRate, month, balance, mainAccount, mainAccountBalance, unallocatedCash, spent, income, monthlyBudget, accounts, categories, budgetsForMonth, goals, subscriptions, transactions, transfers])
 
   useEffect(() => {
     if (!workspace || !data?.settings.browserNotifications || typeof Notification === 'undefined' || Notification.permission !== 'granted') return
@@ -223,7 +238,7 @@ function App() {
 
   const addTransaction = async (transaction: NewTransaction) => { if (!workspace) return; await createTransaction(workspace, transaction); setShowModal(false); setTransactionDraft(null); setNotice(`TRANSACTION SAVED TO ${workspace.toUpperCase()}`); await refreshAll() }
   const addAssistantTransaction = async (draft: TransactionDraft) => {
-    const account = accounts.find((item) => item.id === draft.accountId && item.active)
+    const account = accounts.find((item) => item.id === draft.accountId && item.active) ?? (draft.accountId == null ? mainAccount : null)
     if (!account) throw new Error('Choose an active account before I can create that transaction.')
     const category = draft.kind === 'expense' ? categories.find((item) => item.active && item.name.toLowerCase() === draft.category.toLowerCase()) : null
     if (draft.kind === 'expense' && !category) throw new Error('Choose an active expense category before I can create that transaction.')
@@ -276,7 +291,8 @@ function App() {
   const updatePassword = async (password: string) => { if (!supabase) throw new Error('Supabase is not configured.'); const { error } = await supabase.auth.updateUser({ password }); if (error) throw error; setRecoveryMode(false); setEntryView('login') }
   const signOut = async () => { if (!supabase) return; const { error } = await supabase.auth.signOut(); if (error) throw error; leaveWorkspace() }
 
-  if (!authReady || (session && !workspacesReady && !recoveryMode)) return <div className="app auth-loading" data-theme={theme}><div className="loading-ledger">LOADING YOUR WORKSPACES…</div></div>
+  if (!authReady) return <AppLoadingScreen theme={theme} message="STARTING NULL MONEY" />
+  if (session && !workspacesReady && !recoveryMode) return <AppLoadingScreen theme={theme} message="OPENING YOUR WORKSPACES" />
   if (!session || !workspace || recoveryMode) return <WorkspaceGate view={entryView} theme={theme} setTheme={setTheme} onView={changeEntryView} onSelect={enterWorkspace} workspaces={workspaces} onCreateWorkspace={addWorkspace} authenticated={Boolean(session)} accountEmail={session?.user.email ?? ''} recoveryMode={recoveryMode} onSignIn={signIn} onSignUp={signUp} onResetPassword={resetPassword} onUpdatePassword={updatePassword} />
   const financeSections = ['Accounts', 'Goals', 'Subscriptions'] as const
   const isFinanceSection = financeSections.includes(activeNav as typeof financeSections[number])
@@ -288,7 +304,7 @@ function App() {
       <div className="workspace">
         <Topbar search={search} setSearch={setSearch} theme={theme} setTheme={setTheme} currency={currency} setCurrency={setCurrency} workspace={workspace} unreadCount={unreadCount} onAdd={() => openTransaction()} onNotifications={() => setShowNotifications(true)} onProfile={() => goTo('Settings')} onSwitchWorkspace={leaveWorkspace} />
         {dataError && <div className="data-status error" role="alert"><strong>DATA CONNECTION ISSUE</strong><span>{dataError}</span></div>}
-        {loading && !data ? <Glass className="loading-ledger">CONNECTING TO YOUR LEDGER…</Glass> : activeNav === 'Dashboard' ? <main className="dashboard-main">
+        {loading && !data ? <LedgerLoadingState /> : activeNav === 'Dashboard' ? <main className="dashboard-main">
           <header className="dashboard-page-title"><h1>DASHBOARD</h1><button className="dashboard-add-action" onClick={() => accounts.length ? openTransaction() : goTo('Accounts')}><Plus set="curved" size={18} /><span>{accounts.length ? 'ADD TRANSACTION' : 'CREATE ACCOUNT'}</span></button></header>
           <div className="main-column">
             <Glass className="balance-panel"><div className="balance-copy"><span>GOOD MORNING, ELIO · {new Date().toLocaleDateString('en-LB', { weekday: 'long', month: 'long', day: 'numeric' }).toUpperCase()}</span><h1>{formatMoney(mainAccountBalance)}</h1><div className="available"><i />CURRENT BALANCE <span>{mainAccount?.name?.toUpperCase() ?? 'CREATE A MAIN ACCOUNT'}</span></div></div><div className="balance-system" aria-hidden="true"><span>{String(new Date().getMonth() + 1).padStart(2, '0')} / {String(new Date().getFullYear()).slice(-2)}</span><div>{Array.from({ length: 72 }, (_, i) => <i key={i} />)}</div><b /></div></Glass>

@@ -6,7 +6,8 @@ type Message = { id: number; role: 'user' | 'assistant'; text: string; action?: 
 type Props = { context: FinanceAssistantContext; conversationScope: string; previewTransactions: boolean; onClose: () => void; onNavigate: (route: string) => void; onDraft: (draft: TransactionDraft) => void; onCreateTransaction: (draft: TransactionDraft) => Promise<void>; onOpenSettings: () => void }
 type StoredConversation = { version: 1; expiresAt: number; messages: Message[] }
 
-type SpeechRecognitionInstance = { lang: string; interimResults: boolean; continuous: boolean; start: () => void; stop: () => void; onresult: ((event: { results: ArrayLike<{ 0: { transcript: string } }> }) => void) | null; onerror: (() => void) | null; onend: (() => void) | null }
+type SpeechRecognitionResult = { 0: { transcript: string }; isFinal?: boolean }
+type SpeechRecognitionInstance = { lang: string; interimResults: boolean; continuous: boolean; start: () => void; stop: () => void; onresult: ((event: { results: ArrayLike<SpeechRecognitionResult> }) => void) | null; onerror: ((event: { error?: string }) => void) | null; onend: (() => void) | null }
 type SpeechRecognitionConstructor = new () => SpeechRecognitionInstance
 
 const suggestions = ['What were my largest expenses last week?', 'How much did I save this month?', 'Show my upcoming subscriptions']
@@ -37,6 +38,12 @@ const missingTransactionDetails = (draft: TransactionDraft, context: FinanceAssi
   return [...new Set(missing)]
 }
 
+const withPrimaryAccount = (draft: TransactionDraft, context: FinanceAssistantContext): TransactionDraft => {
+  if (Number.isInteger(draft.accountId)) return draft
+  const primary = context.accounts.find((account) => account.active && account.primary) ?? context.accounts.find((account) => account.active)
+  return primary ? { ...draft, accountId: primary.id } : draft
+}
+
 export default function GeminiAssistant({ context, conversationScope, previewTransactions, onClose, onNavigate, onDraft, onCreateTransaction, onOpenSettings }: Props) {
   const storageKey = `null-money:gemini-conversation:${conversationScope}`
   const [conversation, setConversation] = useState<StoredConversation>(() => readConversation(conversationScope))
@@ -48,6 +55,9 @@ export default function GeminiAssistant({ context, conversationScope, previewTra
   const [voiceEnabled, setVoiceEnabled] = useState(() => localStorage.getItem(voiceKey) !== 'off')
   const [error, setError] = useState('')
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null)
+  const transcriptRef = useRef('')
+  const recognitionFailedRef = useRef(false)
+  const messagesRef = useRef<HTMLDivElement | null>(null)
   const speechRecognition = useMemo(() => (window as unknown as { SpeechRecognition?: SpeechRecognitionConstructor; webkitSpeechRecognition?: SpeechRecognitionConstructor }).SpeechRecognition ?? (window as unknown as { webkitSpeechRecognition?: SpeechRecognitionConstructor }).webkitSpeechRecognition, [])
 
   useEffect(() => {
@@ -56,6 +66,13 @@ export default function GeminiAssistant({ context, conversationScope, previewTra
     const timer = window.setTimeout(() => setConversation(freshConversation()), remaining)
     return () => window.clearTimeout(timer)
   }, [conversation, storageKey])
+
+  useEffect(() => {
+    const container = messagesRef.current
+    if (container) container.scrollTo({ top: container.scrollHeight, behavior: messages.length > 1 ? 'smooth' : 'auto' })
+  }, [messages.length, busy])
+
+  useEffect(() => () => { recognitionRef.current?.stop(); window.speechSynthesis?.cancel() }, [])
 
   const appendMessage = (message: Message) => setConversation((current) => ({ ...current, messages: [...current.messages, message] }))
 
@@ -76,12 +93,13 @@ export default function GeminiAssistant({ context, conversationScope, previewTra
       if (result.model) setActiveModel(result.model.toUpperCase())
       let next: Message = { id: Date.now() + 1, role: 'assistant', text: result.answer, action: result.action }
       if (!previewTransactions && result.action.type === 'draft_transaction' && result.action.transaction) {
-        const missing = missingTransactionDetails(result.action.transaction, context)
+        const resolvedDraft = withPrimaryAccount(result.action.transaction, context)
+        const missing = missingTransactionDetails(resolvedDraft, context)
         if (missing.length) {
           next = { ...next, text: `I still need ${missing.join(', ')} before I can create that transaction.`, action: { type: 'none' } }
         } else {
-          await onCreateTransaction(result.action.transaction)
-          const draft = result.action.transaction
+          await onCreateTransaction(resolvedDraft)
+          const draft = resolvedDraft
           const formattedAmount = draft.currency === 'USD' ? `$${draft.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : `${draft.amount.toLocaleString('en-US')} LBP`
           next = { ...next, text: `${draft.kind === 'expense' ? 'Expense' : 'Income'} created: ${draft.name} · ${formattedAmount}.`, action: { type: 'none' } }
         }
@@ -94,10 +112,21 @@ export default function GeminiAssistant({ context, conversationScope, previewTra
   const listen = () => {
     if (!speechRecognition) return setError('Voice input is not supported in this browser.')
     if (listening) { recognitionRef.current?.stop(); return }
-    const recognition = new speechRecognition(); recognition.lang = 'en-US'; recognition.interimResults = false; recognition.continuous = false
-    recognition.onresult = (event) => { const transcript = event.results[0]?.[0]?.transcript ?? ''; setInput(transcript) }
-    recognition.onerror = () => { setListening(false); setError('I could not hear that clearly. Please try again.') }
-    recognition.onend = () => setListening(false)
+    const recognition = new speechRecognition(); recognition.lang = 'en-US'; recognition.interimResults = true; recognition.continuous = false
+    transcriptRef.current = ''; recognitionFailedRef.current = false
+    recognition.onresult = (event) => {
+      const transcript = Array.from(event.results).map((result) => result[0]?.transcript ?? '').join(' ').trim()
+      transcriptRef.current = transcript; setInput(transcript)
+    }
+    recognition.onerror = (event) => {
+      recognitionFailedRef.current = true; setListening(false)
+      if (event.error !== 'aborted') setError(event.error === 'no-speech' ? 'I did not hear anything. Tap the microphone and try again.' : 'I could not hear that clearly. Please try again.')
+    }
+    recognition.onend = () => {
+      recognitionRef.current = null; setListening(false)
+      const transcript = transcriptRef.current.trim()
+      if (!recognitionFailedRef.current && transcript) { setInput(''); void ask(transcript) }
+    }
     recognitionRef.current = recognition; setListening(true); setError(''); recognition.start()
   }
 
@@ -110,14 +139,15 @@ export default function GeminiAssistant({ context, conversationScope, previewTra
 
   return <div className="assistant-layer" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
     <section className="gemini-assistant glass" role="dialog" aria-modal="true" aria-label="Gemini finance assistant">
-      <header><div><span><i />{activeModel}</span><h2>ASK NULL</h2></div><div><button onClick={toggleVoice} aria-label={voiceEnabled ? 'Turn spoken answers off' : 'Turn spoken answers on'}>{voiceEnabled ? <VolumeUp set="curved" /> : <VolumeOff set="curved" />}</button><button onClick={onClose} aria-label="Close assistant"><CloseSquare set="curved" /></button></div></header>
-      <div className="assistant-messages" aria-live="polite">
+      <header><div className="assistant-identity"><span><i />{activeModel}</span><h2>ASK NULL</h2><small>YOUR FINANCE COPILOT</small></div><div><button onClick={toggleVoice} aria-label={voiceEnabled ? 'Turn spoken answers off' : 'Turn spoken answers on'}>{voiceEnabled ? <VolumeUp set="curved" /> : <VolumeOff set="curved" />}</button><button onClick={onClose} aria-label="Close assistant"><CloseSquare set="curved" /></button></div></header>
+      <div className="assistant-messages" ref={messagesRef} aria-live="polite">
         {messages.map((message) => <article className={message.role} key={message.id}><span>{message.role === 'assistant' ? <Chat set="curved" size={17} /> : 'YOU'}</span><p>{message.text}</p>{message.action && message.action.type !== 'none' ? <button className="assistant-action" onClick={() => runAction(message.action!)}>{message.action.type === 'open_route' ? `OPEN ${message.action.route?.toUpperCase()}` : 'REVIEW TRANSACTION DRAFT'} <b>→</b></button> : null}</article>)}
         {busy ? <article className="assistant thinking"><span><Chat set="curved" size={17} /></span><p>Reviewing your ledger<span className="thinking-dots">•••</span></p></article> : null}
       </div>
       {messages.length === 1 ? <div className="assistant-suggestions">{suggestions.map((item) => <button key={item} onClick={() => void ask(item)}>{item}</button>)}</div> : null}
       {error ? <div className="assistant-error" role="alert"><span>{error}</span><button onClick={onOpenSettings}>OPEN SETTINGS</button></div> : null}
-      <div className="assistant-composer"><button className={listening ? 'listening' : ''} onClick={listen} aria-label={listening ? 'Stop listening' : 'Speak a question'}><Voice set="curved" /></button><textarea value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void ask() } }} placeholder={listening ? 'Listening…' : 'Ask about your money…'} rows={1} /><button className="assistant-send" disabled={!input.trim() || busy} onClick={() => void ask()} aria-label="Send question"><Send set="curved" /></button></div>
+      {listening ? <div className="assistant-voice-state"><span><i /><i /><i /></span><strong>LISTENING</strong><small>Pause naturally when you are done — I’ll send it automatically.</small></div> : null}
+      <div className="assistant-composer"><button className={listening ? 'listening' : ''} disabled={busy} onClick={listen} aria-label={listening ? 'Finish speaking' : 'Speak a question'}><Voice set="curved" /></button><textarea value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void ask() } }} placeholder={listening ? 'Listening — pause to send…' : 'Ask about your money…'} rows={1} /><button className="assistant-send" disabled={!input.trim() || busy || listening} onClick={() => void ask()} aria-label="Send question"><Send set="curved" /></button></div>
       <footer><i />VOICE ANSWERS {voiceEnabled ? 'ON' : 'OFF'}<span>{previewTransactions ? 'Transactions open for review.' : 'Complete transactions post directly.'}</span></footer>
     </section>
   </div>

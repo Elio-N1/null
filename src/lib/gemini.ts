@@ -34,7 +34,7 @@ export type FinanceAssistantContext = {
     incomeThisMonthUsd: number
     monthlyBudgetUsd: number
   }
-  accounts: Array<Pick<Account, 'id' | 'name' | 'currency' | 'active'> & { balanceUsd?: number }>
+  accounts: Array<Pick<Account, 'id' | 'name' | 'currency' | 'active'> & { balanceUsd?: number; primary?: boolean }>
   categories: Pick<Category, 'id' | 'name' | 'group' | 'active'>[]
   budgets: Pick<BudgetItem, 'id' | 'name' | 'categoryId' | 'monthlyLimitUsd' | 'active'>[]
   goals: Pick<Goal, 'id' | 'name' | 'targetAmountUsd' | 'savedAmountUsd' | 'targetDate' | 'active'>[]
