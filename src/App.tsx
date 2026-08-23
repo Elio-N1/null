@@ -26,6 +26,7 @@ import InstallPrompt from './components/InstallPrompt'
 import type { Transaction } from './data'
 import { clearUserWorkspace, createTransaction, createUserWorkspace, deleteTransaction, deleteUserWorkspace, effectiveBudgetAllocation, effectiveMonthlyBudget, loadUserWorkspaces, loadWorkspaceSnapshot, markAllNotificationsRead, markNotificationRead, readWorkspaceCache, removeWorkspaceCache, saveExchangeRate, saveGeminiTransactionPreference, saveNotificationPreferences, writeWorkspaceCache, type BudgetWorkspace, type NewTransaction, type NotificationItem, type WorkspaceRecord, type WorkspaceSnapshot } from './lib/budget-api'
 import { showBrowserNotification } from './lib/browser-notifications'
+import { playSuccessChime } from './lib/audio-feedback'
 import { accountBalance, assignedReserve, goalReserve, totalLiquidBalance } from './lib/finance'
 import { supabase, supabaseConfigured } from './lib/supabase'
 import type { FinanceAssistantContext, TransactionDraft } from './lib/gemini'
@@ -252,6 +253,18 @@ function App() {
       originalCurrency: draft.currency, exchangeRate, notes: draft.notes?.trim() ?? '', accountId: account.id,
       budgetItemId: linkedBudget?.id ?? null,
     })
+    const amountLabel = draft.currency === 'USD'
+      ? `$${originalAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+      : `${originalAmount.toLocaleString('en-US')} LBP`
+    setNotice(`${draft.kind === 'expense' ? 'EXPENSE' : 'INCOME'} ADDED · ${draft.name.toUpperCase()}`)
+    playSuccessChime()
+    if (data?.settings.browserNotifications && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+      void showBrowserNotification(
+        draft.kind === 'expense' ? 'Expense added' : 'Income added',
+        `${draft.name} · ${amountLabel} · ${account.name}`,
+        '/app/transactions',
+      )
+    }
   }
   const openTransaction = (draft: TransactionDraft | null = null) => { setTransactionDraft(draft); setShowScanner(false); setShowModal(true) }
   const removeTransaction = async () => { if (!transactionToDelete || !workspace) return; await deleteTransaction(workspace, transactionToDelete.id); setTransactionToDelete(null); setSelectedTransaction(null); setNotice('TRANSACTION DELETED'); await refreshAll() }

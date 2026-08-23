@@ -19,6 +19,34 @@ const textFromGemini = (payload: Record<string, unknown>) => {
   return candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("").trim() ?? ""
 }
 
+const ttsVoices = new Set(["Achird", "Aoede", "Kore", "Sulafat"])
+
+async function generateSpeech(apiKey: string, text: string, requestedVoice: string) {
+  const model = "gemini-2.5-flash-preview-tts"
+  const voice = ttsVoices.has(requestedVoice) ? requestedVoice : "Sulafat"
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+    body: JSON.stringify({
+      contents: [{ role: "user", parts: [{ text: `Speak this finance-assistant answer naturally, warmly, and clearly. Do not add or remove information.\n\n${text}` }] }],
+      generationConfig: {
+        responseModalities: ["AUDIO"],
+        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } },
+      },
+    }),
+  })
+  const payload = await response.json() as {
+    error?: { message?: string }
+    candidates?: Array<{ content?: { parts?: Array<{ inlineData?: { data?: string; mimeType?: string } }> } }>
+  }
+  if (!response.ok) throw new Error(payload.error?.message ?? `Gemini speech request failed with status ${response.status}.`)
+  const inlineData = payload.candidates?.[0]?.content?.parts?.find((part) => part.inlineData?.data)?.inlineData
+  if (!inlineData?.data) throw new Error("Gemini returned an empty spoken response.")
+  const rateMatch = inlineData.mimeType?.match(/rate=(\d+)/i)
+  return { audio: inlineData.data, mimeType: inlineData.mimeType ?? "audio/L16;codec=pcm;rate=24000", sampleRate: Number(rateMatch?.[1] ?? 24_000), model }
+}
+
 async function generate(apiKey: string, targetModel: string, body: Record<string, unknown>) {
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent`
   const response = await fetch(endpoint, {
@@ -129,7 +157,7 @@ Deno.serve(async (request) => {
     }
   }
 
-  if (mode === "status") return json({ configured: Boolean(apiKey), model: activeModel, capabilities: ["assistant", "receipt_ocr", "structured_actions"] })
+  if (mode === "status") return json({ configured: Boolean(apiKey), model: activeModel, capabilities: ["assistant", "receipt_ocr", "structured_actions", "natural_voice"] })
 
   if (mode === "configure_model") {
     const selectedModel = sanitizeModel(String(input.model ?? defaultModel))
@@ -185,6 +213,12 @@ Deno.serve(async (request) => {
   if (!apiKey) return json({ error: "Gemini is not configured. Add your API key in Settings → Gemini AI." }, 503)
 
   try {
+    if (mode === "speech") {
+      const text = String(input.text ?? "").trim().slice(0, 2500)
+      if (!text) return json({ error: "There is no answer to speak." }, 400)
+      return json(await generateSpeech(apiKey, text, String(input.voice ?? "Sulafat")))
+    }
+
     if (mode === "receipt") {
       const image = String(input.image ?? "")
       const mimeType = String(input.mimeType ?? "image/jpeg")

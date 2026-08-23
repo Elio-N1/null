@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Chat, CloseSquare, Send, Voice, VolumeOff, VolumeUp } from 'react-iconly'
-import { askGemini, type FinanceAssistantContext, type GeminiAction, type TransactionDraft } from '../lib/gemini'
+import { playPcmSpeech, primeAudioFeedback } from '../lib/audio-feedback'
+import { askGemini, generateGeminiSpeech, type FinanceAssistantContext, type GeminiAction, type TransactionDraft } from '../lib/gemini'
 
 type Message = { id: number; role: 'user' | 'assistant'; text: string; action?: GeminiAction }
 type Props = { context: FinanceAssistantContext; conversationScope: string; previewTransactions: boolean; onClose: () => void; onNavigate: (route: string) => void; onDraft: (draft: TransactionDraft) => void; onCreateTransaction: (draft: TransactionDraft) => Promise<void>; onOpenSettings: () => void }
@@ -58,6 +59,9 @@ export default function GeminiAssistant({ context, conversationScope, previewTra
   const transcriptRef = useRef('')
   const recognitionFailedRef = useRef(false)
   const messagesRef = useRef<HTMLDivElement | null>(null)
+  const stopAnswerAudioRef = useRef<(() => void) | null>(null)
+  const speechRequestRef = useRef(0)
+  const voiceEnabledRef = useRef(voiceEnabled)
   const speechRecognition = useMemo(() => (window as unknown as { SpeechRecognition?: SpeechRecognitionConstructor; webkitSpeechRecognition?: SpeechRecognitionConstructor }).SpeechRecognition ?? (window as unknown as { webkitSpeechRecognition?: SpeechRecognitionConstructor }).webkitSpeechRecognition, [])
 
   useEffect(() => {
@@ -67,24 +71,37 @@ export default function GeminiAssistant({ context, conversationScope, previewTra
     return () => window.clearTimeout(timer)
   }, [conversation, storageKey])
 
+  useEffect(() => { voiceEnabledRef.current = voiceEnabled }, [voiceEnabled])
+
   useEffect(() => {
     const container = messagesRef.current
     if (container) container.scrollTo({ top: container.scrollHeight, behavior: messages.length > 1 ? 'smooth' : 'auto' })
   }, [messages.length, busy])
 
-  useEffect(() => () => { recognitionRef.current?.stop(); window.speechSynthesis?.cancel() }, [])
+  const stopSpokenAnswer = () => {
+    speechRequestRef.current += 1
+    stopAnswerAudioRef.current?.()
+    stopAnswerAudioRef.current = null
+  }
+
+  useEffect(() => () => { recognitionRef.current?.stop(); stopSpokenAnswer() }, [])
 
   const appendMessage = (message: Message) => setConversation((current) => ({ ...current, messages: [...current.messages, message] }))
 
-  const speak = (text: string) => {
-    if (!voiceEnabled || !('speechSynthesis' in window)) return
-    window.speechSynthesis.cancel()
-    const utterance = new SpeechSynthesisUtterance(text); utterance.rate = .97; utterance.pitch = 1
-    window.speechSynthesis.speak(utterance)
+  const speak = async (text: string) => {
+    if (!voiceEnabled) return
+    stopSpokenAnswer()
+    const requestId = speechRequestRef.current
+    try {
+      const speech = await generateGeminiSpeech(text.slice(0, 2500))
+      if (!voiceEnabledRef.current || requestId !== speechRequestRef.current) return
+      stopAnswerAudioRef.current = await playPcmSpeech(speech.audio, speech.sampleRate)
+    } catch { /* The written answer remains available when audio generation or playback fails. */ }
   }
 
   const ask = async (question = input) => {
     const prompt = question.trim(); if (!prompt || busy) return
+    primeAudioFeedback()
     const userMessage: Message = { id: Date.now(), role: 'user', text: prompt }
     const conversation = [...messages.slice(-6), userMessage].map((item) => `${item.role.toUpperCase()}: ${item.text}`).join('\n')
     appendMessage(userMessage); setInput(''); setBusy(true); setError('')
@@ -104,7 +121,7 @@ export default function GeminiAssistant({ context, conversationScope, previewTra
           next = { ...next, text: `${draft.kind === 'expense' ? 'Expense' : 'Income'} created: ${draft.name} · ${formattedAmount}.`, action: { type: 'none' } }
         }
       }
-      appendMessage(next); speak(next.text)
+      appendMessage(next); void speak(next.text)
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Gemini could not answer right now.') }
     finally { setBusy(false) }
   }
@@ -135,7 +152,7 @@ export default function GeminiAssistant({ context, conversationScope, previewTra
     if (action.type === 'draft_transaction' && action.transaction) { onDraft(action.transaction); onClose() }
   }
 
-  const toggleVoice = () => { const next = !voiceEnabled; setVoiceEnabled(next); localStorage.setItem(voiceKey, next ? 'on' : 'off'); if (!next) window.speechSynthesis?.cancel() }
+  const toggleVoice = () => { const next = !voiceEnabled; setVoiceEnabled(next); localStorage.setItem(voiceKey, next ? 'on' : 'off'); if (!next) stopSpokenAnswer() }
 
   return <div className="assistant-layer" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
     <section className="gemini-assistant glass" role="dialog" aria-modal="true" aria-label="Gemini finance assistant">

@@ -20,6 +20,7 @@ export type ReceiptResult = TransactionDraft & { confidence: number; lineItems: 
 type RawReceiptResult = { merchant: string; total: number; currency: Currency; date: string; category: string; notes: string; confidence: number; lineItems: Array<{ name: string; amount: number }> }
 export type GeminiAction = { type: 'none' | 'open_route' | 'draft_transaction'; route?: string; transaction?: TransactionDraft }
 export type GeminiAnswer = { answer: string; action: GeminiAction; model: string }
+export type GeminiSpeech = { audio: string; mimeType: string; sampleRate: number; model: string }
 
 export type FinanceAssistantContext = {
   workspace: BudgetWorkspace
@@ -75,3 +76,6 @@ export const scanReceipt = (input: { image: string; mimeType: string; categories
 
 export const askGemini = (prompt: string, context: FinanceAssistantContext) =>
   invoke<GeminiAnswer>({ mode: 'assistant', prompt, context })
+
+export const generateGeminiSpeech = (text: string, voice = 'Sulafat') =>
+  invoke<GeminiSpeech>({ mode: 'speech', text, voice })
