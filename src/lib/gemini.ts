@@ -21,6 +21,8 @@ type RawReceiptResult = { merchant: string; total: number; currency: Currency; d
 export type GeminiAction = { type: 'none' | 'open_route' | 'draft_transaction'; route?: string; transaction?: TransactionDraft }
 export type GeminiAnswer = { answer: string; action: GeminiAction; model: string }
 export type GeminiSpeech = { audio: string; mimeType: string; sampleRate: number; model: string }
+export type GeminiConversationMessage = { id: number; role: 'user' | 'assistant'; text: string; action?: GeminiAction }
+export type SyncedGeminiConversation = { messages: GeminiConversationMessage[]; expiresAt: number; updatedAt: number }
 
 export type FinanceAssistantContext = {
   workspace: BudgetWorkspace
@@ -79,3 +81,42 @@ export const askGemini = (prompt: string, context: FinanceAssistantContext) =>
 
 export const generateGeminiSpeech = (text: string, voice = 'Sulafat') =>
   invoke<GeminiSpeech>({ mode: 'speech', text, voice })
+
+const conversationFromRow = (row: { messages: unknown; expires_at: string; updated_at: string }): SyncedGeminiConversation | null => {
+  const expiresAt = new Date(row.expires_at).getTime()
+  if (!Array.isArray(row.messages) || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) return null
+  return { messages: row.messages as GeminiConversationMessage[], expiresAt, updatedAt: new Date(row.updated_at).getTime() }
+}
+
+export const loadGeminiConversation = async (workspace: BudgetWorkspace) => {
+  if (!supabase) return null
+  const { data, error } = await supabase.from('gemini_conversations').select('messages, expires_at, updated_at').eq('workspace', workspace).maybeSingle()
+  if (error) throw error
+  const conversation = data ? conversationFromRow(data) : null
+  if (data && !conversation) await supabase.from('gemini_conversations').delete().eq('workspace', workspace)
+  return conversation
+}
+
+export const saveGeminiConversation = async (workspace: BudgetWorkspace, conversation: Pick<SyncedGeminiConversation, 'messages' | 'expiresAt'>) => {
+  if (!supabase) return
+  const { error } = await supabase.from('gemini_conversations').upsert({
+    workspace,
+    messages: conversation.messages,
+    expires_at: new Date(conversation.expiresAt).toISOString(),
+    updated_at: new Date().toISOString(),
+  }, { onConflict: 'user_id,workspace' })
+  if (error) throw error
+}
+
+export const subscribeGeminiConversation = (workspace: BudgetWorkspace, onConversation: (conversation: SyncedGeminiConversation) => void) => {
+  const client = supabase
+  if (!client) return () => undefined
+  const channel = client.channel(`gemini-conversation:${workspace}`)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'gemini_conversations', filter: `workspace=eq.${workspace}` }, (payload) => {
+      if (payload.eventType === 'DELETE') return
+      const conversation = conversationFromRow(payload.new as { messages: unknown; expires_at: string; updated_at: string })
+      if (conversation) onConversation(conversation)
+    })
+    .subscribe()
+  return () => { void client.removeChannel(channel) }
+}

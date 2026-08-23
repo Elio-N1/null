@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Chat, CloseSquare, Send, Voice, VolumeOff, VolumeUp } from 'react-iconly'
 import { playPcmSpeech, primeAudioFeedback } from '../lib/audio-feedback'
-import { askGemini, generateGeminiSpeech, type FinanceAssistantContext, type GeminiAction, type TransactionDraft } from '../lib/gemini'
+import { askGemini, generateGeminiSpeech, loadGeminiConversation, saveGeminiConversation, subscribeGeminiConversation, type FinanceAssistantContext, type GeminiAction, type GeminiConversationMessage, type TransactionDraft } from '../lib/gemini'
 
-type Message = { id: number; role: 'user' | 'assistant'; text: string; action?: GeminiAction }
+type Message = GeminiConversationMessage
 type Props = { context: FinanceAssistantContext; conversationScope: string; previewTransactions: boolean; onClose: () => void; onNavigate: (route: string) => void; onDraft: (draft: TransactionDraft) => void; onCreateTransaction: (draft: TransactionDraft) => Promise<void>; onOpenSettings: () => void }
 type StoredConversation = { version: 1; expiresAt: number; messages: Message[] }
 
@@ -16,6 +16,22 @@ const voiceKey = 'null-money:gemini-voice'
 const conversationLifetime = 24 * 60 * 60 * 1000
 const greeting: Message = { id: 1, role: 'assistant', text: 'Ask about your spending, budgets, goals, or subscriptions. I can also create complete transactions for you.' }
 const freshConversation = (): StoredConversation => ({ version: 1, expiresAt: Date.now() + conversationLifetime, messages: [greeting] })
+
+const speechChunks = (text: string) => {
+  const normalized = text.trim()
+  if (!normalized) return []
+  const firstSentence = normalized.match(/^.{1,260}?[.!?](?:\s|$)/)?.[0]
+  const firstEnd = firstSentence?.length ?? Math.min(normalized.length, 220)
+  const chunks = [normalized.slice(0, firstEnd).trim()]
+  let remainder = normalized.slice(firstEnd).trim()
+  while (remainder) {
+    let cut = Math.min(650, remainder.length)
+    if (cut < remainder.length) cut = Math.max(220, remainder.lastIndexOf(' ', cut))
+    chunks.push(remainder.slice(0, cut).trim())
+    remainder = remainder.slice(cut).trim()
+  }
+  return chunks
+}
 
 const readConversation = (scope: string): StoredConversation => {
   try {
@@ -62,6 +78,9 @@ export default function GeminiAssistant({ context, conversationScope, previewTra
   const stopAnswerAudioRef = useRef<(() => void) | null>(null)
   const speechRequestRef = useRef(0)
   const voiceEnabledRef = useRef(voiceEnabled)
+  const conversationReadyRef = useRef(false)
+  const remoteConversationRef = useRef(false)
+  const initialConversationRef = useRef(conversation)
   const speechRecognition = useMemo(() => (window as unknown as { SpeechRecognition?: SpeechRecognitionConstructor; webkitSpeechRecognition?: SpeechRecognitionConstructor }).SpeechRecognition ?? (window as unknown as { webkitSpeechRecognition?: SpeechRecognitionConstructor }).webkitSpeechRecognition, [])
 
   useEffect(() => {
@@ -70,6 +89,33 @@ export default function GeminiAssistant({ context, conversationScope, previewTra
     const timer = window.setTimeout(() => setConversation(freshConversation()), remaining)
     return () => window.clearTimeout(timer)
   }, [conversation, storageKey])
+
+  useEffect(() => {
+    let active = true
+    conversationReadyRef.current = false
+    void loadGeminiConversation(context.workspace).then((remote) => {
+      if (!active) return
+      if (remote?.messages.length) {
+        remoteConversationRef.current = true
+        setConversation({ version: 1, expiresAt: remote.expiresAt, messages: remote.messages })
+      }
+      conversationReadyRef.current = true
+      if (!remote) void saveGeminiConversation(context.workspace, initialConversationRef.current)
+    }).catch(() => { conversationReadyRef.current = true })
+    const unsubscribe = subscribeGeminiConversation(context.workspace, (remote) => {
+      if (!active) return
+      remoteConversationRef.current = true
+      setConversation({ version: 1, expiresAt: remote.expiresAt, messages: remote.messages })
+    })
+    return () => { active = false; unsubscribe() }
+  }, [context.workspace])
+
+  useEffect(() => {
+    if (!conversationReadyRef.current) return
+    if (remoteConversationRef.current) { remoteConversationRef.current = false; return }
+    const timer = window.setTimeout(() => void saveGeminiConversation(context.workspace, conversation), 180)
+    return () => window.clearTimeout(timer)
+  }, [context.workspace, conversation])
 
   useEffect(() => { voiceEnabledRef.current = voiceEnabled }, [voiceEnabled])
 
@@ -93,9 +139,14 @@ export default function GeminiAssistant({ context, conversationScope, previewTra
     stopSpokenAnswer()
     const requestId = speechRequestRef.current
     try {
-      const speech = await generateGeminiSpeech(text.slice(0, 2500))
-      if (!voiceEnabledRef.current || requestId !== speechRequestRef.current) return
-      stopAnswerAudioRef.current = await playPcmSpeech(speech.audio, speech.sampleRate)
+      const pendingSpeech = speechChunks(text.slice(0, 2500)).map((chunk) => generateGeminiSpeech(chunk))
+      for (const pending of pendingSpeech) {
+        const speech = await pending
+        if (!voiceEnabledRef.current || requestId !== speechRequestRef.current) return
+        const playback = await playPcmSpeech(speech.audio, speech.sampleRate)
+        stopAnswerAudioRef.current = playback.stop
+        await playback.ended
+      }
     } catch { /* The written answer remains available when audio generation or playback fails. */ }
   }
 

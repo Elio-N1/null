@@ -59,8 +59,14 @@ export const playPcmSpeech = async (base64: string, sampleRate = 24_000) => {
   source.buffer = buffer
   source.connect(gain)
   gain.connect(context.destination)
+  let finishPlayback: () => void = () => undefined
+  const ended = new Promise<void>((resolve) => { finishPlayback = resolve })
+  source.onended = finishPlayback
   source.start()
-  return () => { try { source.stop() } catch { /* It may have already finished. */ } }
+  return {
+    ended,
+    stop: () => { try { source.stop() } catch { finishPlayback() } },
+  }
 }
 
 export const playSuccessChime = () => {
