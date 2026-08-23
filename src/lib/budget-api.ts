@@ -4,7 +4,7 @@ import { supabase } from './supabase'
 export type BudgetWorkspace = string
 export type WorkspaceRecord = { id: string; slug: BudgetWorkspace; name: string; createdAt: string }
 export type Currency = 'USD' | 'LBP'
-export type AppSettings = { exchangeRate: number; monthlyBudget: number; openingBalance: number; subscriptionRemindersEnabled: boolean; subscriptionReminderDays: number[]; browserNotifications: boolean }
+export type AppSettings = { exchangeRate: number; monthlyBudget: number; openingBalance: number; subscriptionRemindersEnabled: boolean; subscriptionReminderDays: number[]; browserNotifications: boolean; geminiTransactionPreview: boolean }
 export type NotificationItem = { id: number; title: string; body: string; type: 'info' | 'success' | 'warning'; actionTarget: string | null; readAt: string | null; createdAt: string }
 export type ManagedRecord = { id: number; section: string; name: string; detail: string; value: string; progress: number; active: boolean }
 export type Account = { id: number; name: string; accountType: string; currency: Currency; originalBalance: number; exchangeRate: number; startingBalanceUsd: number; active: boolean }
@@ -49,14 +49,14 @@ export async function deleteUserWorkspace(workspace: BudgetWorkspace) {
 }
 
 export async function loadSettings(workspace: BudgetWorkspace): Promise<AppSettings> {
-  const { data, error } = await ensureClient().from('app_settings').select('exchange_rate_lbp_per_usd,monthly_budget_usd,opening_balance_usd,subscription_reminders_enabled,subscription_reminder_days,browser_notifications').eq('workspace', workspace).single()
+  const { data, error } = await ensureClient().from('app_settings').select('exchange_rate_lbp_per_usd,monthly_budget_usd,opening_balance_usd,subscription_reminders_enabled,subscription_reminder_days,browser_notifications,gemini_transaction_preview').eq('workspace', workspace).single()
   if (error && (error.code === '42703' || error.code === 'PGRST204')) {
     const legacy = await ensureClient().from('app_settings').select('exchange_rate_lbp_per_usd,monthly_budget_usd,opening_balance_usd').eq('workspace', workspace).single()
     if (legacy.error) throw legacy.error
-    return { exchangeRate: number(legacy.data.exchange_rate_lbp_per_usd), monthlyBudget: number(legacy.data.monthly_budget_usd), openingBalance: number(legacy.data.opening_balance_usd), subscriptionRemindersEnabled: true, subscriptionReminderDays: [7, 3, 1], browserNotifications: false }
+    return { exchangeRate: number(legacy.data.exchange_rate_lbp_per_usd), monthlyBudget: number(legacy.data.monthly_budget_usd), openingBalance: number(legacy.data.opening_balance_usd), subscriptionRemindersEnabled: true, subscriptionReminderDays: [7, 3, 1], browserNotifications: false, geminiTransactionPreview: true }
   }
   if (error) throw error
-  return { exchangeRate: number(data.exchange_rate_lbp_per_usd), monthlyBudget: number(data.monthly_budget_usd), openingBalance: number(data.opening_balance_usd), subscriptionRemindersEnabled: data.subscription_reminders_enabled ?? true, subscriptionReminderDays: data.subscription_reminder_days ?? [7, 3, 1], browserNotifications: data.browser_notifications ?? false }
+  return { exchangeRate: number(data.exchange_rate_lbp_per_usd), monthlyBudget: number(data.monthly_budget_usd), openingBalance: number(data.opening_balance_usd), subscriptionRemindersEnabled: data.subscription_reminders_enabled ?? true, subscriptionReminderDays: data.subscription_reminder_days ?? [7, 3, 1], browserNotifications: data.browser_notifications ?? false, geminiTransactionPreview: data.gemini_transaction_preview ?? true }
 }
 
 export async function saveMonthlyBudget(workspace: BudgetWorkspace, input: { month: string; amountUsd: number; recurring: boolean }) {
@@ -123,6 +123,11 @@ export async function saveNotificationPreferences(workspace: BudgetWorkspace, in
   const { error } = await ensureClient().from('app_settings').update({ subscription_reminders_enabled: input.enabled, subscription_reminder_days: reminderDays, browser_notifications: input.browserNotifications, updated_at: new Date().toISOString() }).eq('workspace', workspace)
   if (error && error.code !== '42703' && error.code !== 'PGRST204') throw error
   if (input.enabled) await generateSubscriptionReminders(workspace)
+}
+
+export async function saveGeminiTransactionPreference(workspace: BudgetWorkspace, previewTransactions: boolean) {
+  const { error } = await ensureClient().from('app_settings').update({ gemini_transaction_preview: previewTransactions, updated_at: new Date().toISOString() }).eq('workspace', workspace)
+  if (error) throw error
 }
 
 export async function generateSubscriptionReminders(workspace: BudgetWorkspace) {

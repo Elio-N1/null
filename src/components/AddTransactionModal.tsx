@@ -17,7 +17,7 @@ export default function AddTransactionModal({ exchangeRate, accounts, categories
   const [categoryId, setCategoryId] = useState(String(categories.find((item) => item.name.toLowerCase() === draft?.category?.toLowerCase())?.id ?? categories.find((item) => item.name === 'Food & dining')?.id ?? categories[0]?.id ?? ''))
   const [incomeCategory, setIncomeCategory] = useState(draft?.kind === 'income' && incomeCategories.includes(draft.category) ? draft.category : 'Salary')
   const [customIncomeCategory, setCustomIncomeCategory] = useState('')
-  const [accountId, setAccountId] = useState(String(accounts.find((item) => item.active)?.id ?? ''))
+  const [accountId, setAccountId] = useState(String(accounts.find((item) => item.id === draft?.accountId && item.active)?.id ?? accounts.find((item) => item.active)?.id ?? ''))
   const [kind, setKind] = useState<'expense' | 'income'>(draft?.kind ?? 'expense')
   const [currency, setCurrency] = useState<'USD' | 'LBP'>(draft?.currency ?? 'USD')
   const [transactionRate, setTransactionRate] = useState(String(exchangeRate))

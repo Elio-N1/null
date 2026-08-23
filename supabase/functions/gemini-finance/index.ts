@@ -66,7 +66,9 @@ const assistantSchema = {
             kind: { type: "STRING", enum: ["expense", "income"] }, name: { type: "STRING" },
             amount: { type: "NUMBER" }, currency: { type: "STRING", enum: ["USD", "LBP"] },
             category: { type: "STRING" }, date: { type: "STRING" }, notes: { type: "STRING" },
+            accountId: { type: "INTEGER", description: "Exact active account id from the supplied finance context" },
           },
+          required: ["kind", "name", "amount", "currency", "category", "date", "notes", "accountId"],
         },
       },
       required: ["type"],
@@ -205,7 +207,7 @@ Deno.serve(async (request) => {
       if (!prompt) return json({ error: "Ask a finance question first." }, 400)
       const context = JSON.stringify(input.context ?? {}).slice(0, 140_000)
       const response = await generate(apiKey, activeModel, {
-        systemInstruction: { parts: [{ text: `You are NULL Money's concise personal finance assistant. Answer only from the supplied ledger context. Use exact dates and amounts, distinguish USD and LBP, exclude transfers from income/expense analysis, and say when data is insufficient. For navigation requests use open_route with one of Dashboard, Budget, Transactions, Accounts, Goals, Subscriptions, Reports, Settings. For requests to record money, use draft_transaction; never claim it was saved because the user must review and confirm the form. For all other requests use none. Today is ${new Date().toISOString().slice(0, 10)}.` }] },
+        systemInstruction: { parts: [{ text: `You are NULL Money's concise personal finance assistant. Answer only from the supplied ledger context. Use exact dates and amounts, distinguish USD and LBP, exclude transfers from income/expense analysis, and say when data is insufficient. For navigation requests use open_route with one of Dashboard, Budget, Transactions, Accounts, Goals, Subscriptions, Reports, Settings. For requests to record money, return draft_transaction only when you can resolve every required value: kind, a clear name, a positive amount, explicit currency, an active accountId from the supplied context, a category, and an ISO date. Infer an obvious expense category from the active categories. Use today's date when no date is mentioned. Use the sole active account when there is exactly one; otherwise ask which account unless the user clearly names one. Never invent a currency, account, or unclear category. If anything required remains unclear, use action type none and ask one concise follow-up listing only the missing details. Do not say that a transaction was saved; the client decides whether to preview or post a complete action. For all other requests use none. Today is ${new Date().toISOString().slice(0, 10)}.` }] },
         contents: [{ role: "user", parts: [{ text: `FINANCE CONTEXT:\n${context}\n\nUSER REQUEST:\n${prompt}` }] }],
         generationConfig: { responseMimeType: "application/json", responseSchema: assistantSchema, temperature: 0.2 },
       })

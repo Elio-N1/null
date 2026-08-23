@@ -15,7 +15,7 @@ export const AVAILABLE_GEMINI_MODELS = [
 export const sanitizeModel = (model: string): string => model || DEFAULT_GEMINI_MODEL
 
 export type GeminiStatus = { configured: boolean; model: string; capabilities: string[] }
-export type TransactionDraft = { kind: 'expense' | 'income'; name: string; amount: number; currency: Currency; category: string; date: string; notes: string }
+export type TransactionDraft = { kind: 'expense' | 'income'; name: string; amount: number; currency: Currency; category: string; date: string; notes: string; accountId?: number }
 export type ReceiptResult = TransactionDraft & { confidence: number; lineItems: Array<{ name: string; amount: number }> }
 type RawReceiptResult = { merchant: string; total: number; currency: Currency; date: string; category: string; notes: string; confidence: number; lineItems: Array<{ name: string; amount: number }> }
 export type GeminiAction = { type: 'none' | 'open_route' | 'draft_transaction'; route?: string; transaction?: TransactionDraft }

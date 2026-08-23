@@ -24,7 +24,7 @@ import Transactions from './components/Transactions'
 import WorkspaceGate from './components/WorkspaceGate'
 import InstallPrompt from './components/InstallPrompt'
 import type { Transaction } from './data'
-import { clearUserWorkspace, createTransaction, createUserWorkspace, deleteTransaction, deleteUserWorkspace, effectiveBudgetAllocation, effectiveMonthlyBudget, loadUserWorkspaces, loadWorkspaceSnapshot, markAllNotificationsRead, markNotificationRead, readWorkspaceCache, removeWorkspaceCache, saveExchangeRate, saveNotificationPreferences, writeWorkspaceCache, type BudgetWorkspace, type NewTransaction, type NotificationItem, type WorkspaceRecord, type WorkspaceSnapshot } from './lib/budget-api'
+import { clearUserWorkspace, createTransaction, createUserWorkspace, deleteTransaction, deleteUserWorkspace, effectiveBudgetAllocation, effectiveMonthlyBudget, loadUserWorkspaces, loadWorkspaceSnapshot, markAllNotificationsRead, markNotificationRead, readWorkspaceCache, removeWorkspaceCache, saveExchangeRate, saveGeminiTransactionPreference, saveNotificationPreferences, writeWorkspaceCache, type BudgetWorkspace, type NewTransaction, type NotificationItem, type WorkspaceRecord, type WorkspaceSnapshot } from './lib/budget-api'
 import { showBrowserNotification } from './lib/browser-notifications'
 import { accountBalance, assignedReserve, goalReserve, totalLiquidBalance } from './lib/finance'
 import { supabase, supabaseConfigured } from './lib/supabase'
@@ -222,6 +222,22 @@ function App() {
   }, [data?.settings.browserNotifications, notifications, workspace, session?.user.id])
 
   const addTransaction = async (transaction: NewTransaction) => { if (!workspace) return; await createTransaction(workspace, transaction); setShowModal(false); setTransactionDraft(null); setNotice(`TRANSACTION SAVED TO ${workspace.toUpperCase()}`); await refreshAll() }
+  const addAssistantTransaction = async (draft: TransactionDraft) => {
+    const account = accounts.find((item) => item.id === draft.accountId && item.active)
+    if (!account) throw new Error('Choose an active account before I can create that transaction.')
+    const category = draft.kind === 'expense' ? categories.find((item) => item.active && item.name.toLowerCase() === draft.category.toLowerCase()) : null
+    if (draft.kind === 'expense' && !category) throw new Error('Choose an active expense category before I can create that transaction.')
+    const originalAmount = Math.abs(Number(draft.amount))
+    if (!Number.isFinite(originalAmount) || originalAmount <= 0) throw new Error('The transaction needs an amount greater than zero.')
+    const amountUsd = draft.currency === 'LBP' ? originalAmount / exchangeRate : originalAmount
+    const linkedBudget = draft.kind === 'expense' ? budgetsForMonth.find((item) => item.active && item.categoryId === category?.id) : undefined
+    await addTransaction({
+      name: draft.name.trim(), category: draft.category.trim(), date: draft.date, kind: draft.kind,
+      amount: Number((amountUsd * (draft.kind === 'expense' ? -1 : 1)).toFixed(2)), originalAmount,
+      originalCurrency: draft.currency, exchangeRate, notes: draft.notes?.trim() ?? '', accountId: account.id,
+      budgetItemId: linkedBudget?.id ?? null,
+    })
+  }
   const openTransaction = (draft: TransactionDraft | null = null) => { setTransactionDraft(draft); setShowScanner(false); setShowModal(true) }
   const removeTransaction = async () => { if (!transactionToDelete || !workspace) return; await deleteTransaction(workspace, transactionToDelete.id); setTransactionToDelete(null); setSelectedTransaction(null); setNotice('TRANSACTION DELETED'); await refreshAll() }
   const updateExchangeRate = async (rate: number) => { if (!workspace) return; await saveExchangeRate(workspace, rate); setNotice('DEFAULT EXCHANGE RATE UPDATED'); await refreshAll() }
@@ -231,6 +247,13 @@ function App() {
     const next = { ...data, settings: { ...data.settings, subscriptionRemindersEnabled: input.enabled, subscriptionReminderDays: input.reminderDays, browserNotifications: input.browserNotifications } }
     commitData(next)
     try { await saveNotificationPreferences(workspace, input); setNotice('NOTIFICATION PREFERENCES UPDATED'); void refreshAll() }
+    catch (reason) { commitData(previous); throw reason }
+  }
+  const updateGeminiPreference = async (previewTransactions: boolean) => {
+    if (!workspace || !data) return
+    const previous = data
+    commitData({ ...data, settings: { ...data.settings, geminiTransactionPreview: previewTransactions } })
+    try { await saveGeminiTransactionPreference(workspace, previewTransactions); setNotice('GEMINI ACTION BEHAVIOR UPDATED'); void refreshAll() }
     catch (reason) { commitData(previous); throw reason }
   }
   const optimisticToggleFinance = (section: string, id: number, active: boolean) => {
@@ -273,7 +296,7 @@ function App() {
             <Transactions transactions={filtered} pageSize={10} formatMoney={formatMoney} onViewAll={() => goTo('Transactions')} onSelect={setSelectedTransaction} />
           </div>
           <div className="right-column"><BudgetPulse month={month} onMonthChange={setMonth} spent={spent} budget={monthlyBudget} formatMoney={formatMoney} /><SubscriptionPanel subscriptions={subscriptions} accounts={accounts} budgets={budgetsForMonth} onViewAll={() => goTo('Subscriptions')} formatMoney={formatMoney} /><CategoryPanel onViewAll={() => goTo('Budget')} transactions={monthTransactions} budgets={budgetsForMonth} categories={categories} formatMoney={formatMoney} /></div>
-        </main> : activeNav === 'Budget' ? <PlanModule workspace={workspace} month={month} setMonth={setMonth} monthlyBudgets={monthlyBudgets} allocations={budgetAllocations} budgets={budgets} categories={categories} goals={goals} transactions={transactions} unallocatedCash={unallocatedCash} onChanged={() => refreshAll()} onNotice={setNotice} /> : activeNav === 'Reports' ? <ReportsModule transactions={transactions} months={monthlyBudgets} budgets={budgetsForMonth} /> : activeNav === 'Transactions' ? <LedgerModule transactions={filtered} accounts={accounts} categories={categories} formatMoney={formatMoney} onAdd={() => openTransaction()} onSelect={setSelectedTransaction} /> : activeNav === 'Settings' ? <FinancialSettings workspace={workspace} workspaces={workspaces} settings={data?.settings ?? { exchangeRate, monthlyBudget: 0, openingBalance: 0, subscriptionRemindersEnabled: true, subscriptionReminderDays: [7, 3, 1], browserNotifications: false }} accountEmail={session.user.email ?? ''} onCreateWorkspace={addWorkspace} onSelectWorkspace={enterWorkspace} onClearWorkspace={clearWorkspace} onDeleteWorkspace={removeWorkspace} onSaveRate={updateExchangeRate} onSavePreferences={updateNotificationPreferences} onResetPassword={() => resetPassword()} onSignOut={signOut} /> : isFinanceSection ? <FinanceModule key={`${workspace}-${activeNav}-${month}`} workspace={workspace} section={activeNav as typeof financeSections[number]} exchangeRate={exchangeRate} monthlyBudget={monthlyBudget} month={month} accounts={accounts} categories={categories} budgets={budgetsForMonth} goals={goals} subscriptions={subscriptions} transactions={transactions} transfers={transfers} unallocatedCash={unallocatedCash} onTransfer={() => setShowTransfer(true)} onChanged={() => refreshAll()} onOptimisticToggle={optimisticToggleFinance} onNotice={setNotice} /> : <ManagedModule key={`${workspace}-${activeNav}`} workspace={workspace} section={activeNav} onNotice={setNotice} />}
+        </main> : activeNav === 'Budget' ? <PlanModule workspace={workspace} month={month} setMonth={setMonth} monthlyBudgets={monthlyBudgets} allocations={budgetAllocations} budgets={budgets} categories={categories} goals={goals} transactions={transactions} unallocatedCash={unallocatedCash} onChanged={() => refreshAll()} onNotice={setNotice} /> : activeNav === 'Reports' ? <ReportsModule transactions={transactions} months={monthlyBudgets} budgets={budgetsForMonth} /> : activeNav === 'Transactions' ? <LedgerModule transactions={filtered} accounts={accounts} categories={categories} formatMoney={formatMoney} onAdd={() => openTransaction()} onSelect={setSelectedTransaction} /> : activeNav === 'Settings' ? <FinancialSettings workspace={workspace} workspaces={workspaces} settings={data?.settings ?? { exchangeRate, monthlyBudget: 0, openingBalance: 0, subscriptionRemindersEnabled: true, subscriptionReminderDays: [7, 3, 1], browserNotifications: false, geminiTransactionPreview: true }} accountEmail={session.user.email ?? ''} onCreateWorkspace={addWorkspace} onSelectWorkspace={enterWorkspace} onClearWorkspace={clearWorkspace} onDeleteWorkspace={removeWorkspace} onSaveRate={updateExchangeRate} onSavePreferences={updateNotificationPreferences} onSaveGeminiPreference={updateGeminiPreference} onResetPassword={() => resetPassword()} onSignOut={signOut} /> : isFinanceSection ? <FinanceModule key={`${workspace}-${activeNav}-${month}`} workspace={workspace} section={activeNav as typeof financeSections[number]} exchangeRate={exchangeRate} monthlyBudget={monthlyBudget} month={month} accounts={accounts} categories={categories} budgets={budgetsForMonth} goals={goals} subscriptions={subscriptions} transactions={transactions} transfers={transfers} unallocatedCash={unallocatedCash} onTransfer={() => setShowTransfer(true)} onChanged={() => refreshAll()} onOptimisticToggle={optimisticToggleFinance} onNotice={setNotice} /> : <ManagedModule key={`${workspace}-${activeNav}`} workspace={workspace} section={activeNav} onNotice={setNotice} />}
       </div>
     </div>
     <MobileNav active={activeNav} onSelect={goTo} onAdd={() => accounts.length ? openTransaction() : goTo('Accounts')} />
@@ -285,7 +308,7 @@ function App() {
     {transactionToDelete && <ConfirmDialog destructive title={`DELETE ${transactionToDelete.name.toUpperCase()}?`} body="This transaction will be removed from the ledger and related balance and budget totals will be recalculated." confirmLabel="DELETE TRANSACTION" onCancel={() => setTransactionToDelete(null)} onConfirm={removeTransaction} />}
     {showModal && <AddTransactionModal key={`${transactionDraft?.name ?? 'manual'}-${transactionDraft?.date ?? ''}`} draft={transactionDraft} exchangeRate={exchangeRate} accounts={accounts} categories={categories} budgets={budgetsForMonth} onClose={() => { setShowModal(false); setTransactionDraft(null) }} onScanReceipt={() => { setShowModal(false); setTransactionDraft(null); setShowScanner(true) }} onAdd={addTransaction} />}
     {showScanner && <ReceiptScannerModal categories={categories} onClose={() => setShowScanner(false)} onExtracted={(draft) => openTransaction(draft)} />}
-    {showAssistant && <GeminiAssistant context={assistantContext} onClose={() => setShowAssistant(false)} onNavigate={goTo} onDraft={(draft) => openTransaction(draft)} onOpenSettings={() => { setShowAssistant(false); goTo('Settings') }} />}
+    {showAssistant && <GeminiAssistant context={assistantContext} conversationScope={`${session.user.id}:${workspace}`} previewTransactions={data?.settings.geminiTransactionPreview ?? true} onClose={() => setShowAssistant(false)} onNavigate={goTo} onDraft={(draft) => openTransaction(draft)} onCreateTransaction={addAssistantTransaction} onOpenSettings={() => { setShowAssistant(false); goTo('Settings') }} />}
     {showTransfer && <AccountTransferModal workspace={workspace} accounts={accounts} exchangeRate={exchangeRate} onClose={() => setShowTransfer(false)} onSaved={() => refreshAll()} />}
   </div>
 }
