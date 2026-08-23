@@ -1,11 +1,11 @@
-import { Activity, ArrowLeft, ArrowRight, Bag, Category, Chart, Document, Home, Setting, Ticket, Wallet } from 'react-iconly'
+import { Activity, ArrowLeft, ArrowRight, Chart, Document, Home, Setting, Ticket, Wallet } from 'react-iconly'
 import { DotMark, Glass } from './Glass'
 
 const items = [
-  { label: 'Dashboard', icon: Home }, { label: 'Accounts', icon: Wallet },
-  { label: 'Transactions', icon: Document }, { label: 'Budgets', icon: Chart },
-  { label: 'Goals', icon: Activity }, { label: 'Categories', icon: Category },
-  { label: 'Subscriptions', icon: Ticket }, { label: 'Investments', icon: Bag },
+  { label: 'Dashboard', icon: Home }, { label: 'Budget', icon: Chart },
+  { label: 'Transactions', icon: Document }, { label: 'Accounts', icon: Wallet },
+  { label: 'Goals', icon: Activity }, { label: 'Subscriptions', icon: Ticket },
+  { label: 'Reports', icon: Chart },
 ]
 
 type SidebarProps = { active: string; onSelect: (label: string) => void; collapsed: boolean; onToggle: () => void }

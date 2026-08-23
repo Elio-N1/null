@@ -5,6 +5,13 @@ export type Transaction = {
   date: string
   amount: number
   kind: 'expense' | 'income'
+  originalAmount?: number
+  originalCurrency?: 'USD' | 'LBP'
+  exchangeRate?: number
+  notes?: string
+  accountId?: number | null
+  budgetItemId?: number | null
+  subscriptionId?: number | null
 }
 
 export const seedTransactions: Transaction[] = [

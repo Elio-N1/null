@@ -1,0 +1,22 @@
+{
+  "id": "/",
+  "name": "NULL Money",
+  "short_name": "NULL",
+  "description": "A private USD and LBP personal finance workspace.",
+  "start_url": "/app/dashboard",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
+  "orientation": "portrait-primary",
+  "background_color": "#101114",
+  "theme_color": "#101114",
+  "categories": ["finance", "productivity"],
+  "icons": [
+    { "src": "/icons/null-money-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icons/null-money-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Add transaction", "short_name": "Add", "url": "/app/dashboard?action=add", "icons": [{ "src": "/icons/null-money-192.png", "sizes": "192x192", "type": "image/png" }] },
+    { "name": "Open budget", "short_name": "Budget", "url": "/app/budget", "icons": [{ "src": "/icons/null-money-192.png", "sizes": "192x192", "type": "image/png" }] }
+  ]
+}

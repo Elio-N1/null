@@ -4,3 +4,7 @@ dist/
 *.log
 .codex/
 supabase/.temp/
+.vercel/
+.env
+.env.*
+!.env.example
